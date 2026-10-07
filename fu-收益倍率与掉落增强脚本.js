@@ -1,29 +1,26 @@
 //@AutoLoad @Evalv8
-// 收益倍率与掉落增强 | 可配置版本
-// 默认全部不启用，需在 F7 → "自定义配置" 标签页中逐项开启
-// 未启用时完全保持游戏原始行为
+// 收益倍率与掉落增强 | 默认全部启用（首次运行自动启用，可在 F7 关闭）
 (function() {
     'use strict';
 
     var SCRIPT_NAME = '收益倍率与掉落增强';
 
-    // ========== 配置定义 ==========
     var CONFIG_DEFS = {
         gold_rate: {
             type: 'number',
-            label: '金币获取倍率（默认 5）',
+            label: '金币获取倍率',
             defaultValue: 5,
             min: 1, max: 1000, step: 1
         },
         exp_rate: {
             type: 'number',
-            label: '经验获取倍率（默认 10）',
+            label: '经验获取倍率',
             defaultValue: 10,
             min: 1, max: 1000, step: 1
         },
         item_rate: {
             type: 'number',
-            label: '普通物品获取倍率（默认 7）',
+            label: '普通物品获取倍率',
             defaultValue: 7,
             min: 1, max: 1000, step: 1
         },
@@ -39,14 +36,12 @@
         }
     };
 
-    // ========== 配置读取 ==========
     function isEnabled(key) {
         if (window.KeyMapper && typeof window.KeyMapper.isConfigEnabled === 'function') {
             return window.KeyMapper.isConfigEnabled(SCRIPT_NAME, key);
         }
-        return false;
+        return true;  // 默认启用
     }
-
     function getVal(key, fallback) {
         if (window.KeyMapper && typeof window.KeyMapper.getConfigValue === 'function') {
             var v = window.KeyMapper.getConfigValue(SCRIPT_NAME, key);
@@ -55,41 +50,54 @@
         return fallback;
     }
 
-    // ========== 注册到配置系统（Pub/Sub + 暂存表） ==========
-    var CONFIG_PAYLOAD = { name: SCRIPT_NAME, defs: CONFIG_DEFS };
+    // ========== 注册 + 默认启用 ==========
+    var CFG_PAYLOAD = { name: SCRIPT_NAME, defs: CONFIG_DEFS };
+    var INIT_FLAG = 'mult_default_enabled_v1';
 
-    function commitRegisterConfig() {
+    function commitRegister() {
         if (window.KeyMapper && typeof window.KeyMapper.registerConfig === 'function') {
-            window.KeyMapper.registerConfig(CONFIG_PAYLOAD.name, CONFIG_PAYLOAD.defs);
+            window.KeyMapper.registerConfig(CFG_PAYLOAD.name, CFG_PAYLOAD.defs);
             return true;
         }
         return false;
     }
 
-    if (commitRegisterConfig()) {
-        console.log('[收益倍率] 已注册配置');
-    } else {
-        window.__keyMapperPendingConfigs = window.__keyMapperPendingConfigs || [];
-        if (!window.__keyMapperPendingConfigs.some(function(r) { return r.name === SCRIPT_NAME; })) {
-            window.__keyMapperPendingConfigs.push(CONFIG_PAYLOAD);
-            console.log('[收益倍率] KeyMapper 未就绪，已写入暂存表');
-        }
+    function applyDefaultsOnce() {
+        var alreadyInited = false;
+        try { alreadyInited = !!localStorage.getItem(INIT_FLAG); } catch(e) {}
+        if (alreadyInited) return true;
+        if (!window.KeyMapper || typeof window.KeyMapper.setConfigEnabled !== 'function') return false;
+        Object.keys(CONFIG_DEFS).forEach(function(k) {
+            window.KeyMapper.setConfigEnabled(SCRIPT_NAME, k, true);
+            window.KeyMapper.setConfigValue(SCRIPT_NAME, k, CONFIG_DEFS[k].defaultValue);
+        });
+        try { localStorage.setItem(INIT_FLAG, '1'); } catch(e) {}
+        console.log('[收益倍率] 首次运行，已默认启用所有配置项');
+        return true;
+    }
 
-        if (!window.__mult_readyHandler) {
-            window.__mult_readyHandler = function() {
-                if (commitRegisterConfig()) {
-                    console.log('[收益倍率] 收到 keymapper:ready，已完成注册');
-                }
-                if (window.__keyMapperPendingConfigs) {
-                    window.__keyMapperPendingConfigs = window.__keyMapperPendingConfigs.filter(function(r) {
-                        return r.name !== SCRIPT_NAME;
-                    });
-                }
-                window.removeEventListener('keymapper:ready', window.__mult_readyHandler);
-                delete window.__mult_readyHandler;
-            };
-            window.addEventListener('keymapper:ready', window.__mult_readyHandler);
+    var _registered = commitRegister();
+    var _inited = applyDefaultsOnce();
+
+    if (!_registered || !_inited) {
+        window.__keyMapperPendingConfigs = window.__keyMapperPendingConfigs || [];
+        if (!_registered && !window.__keyMapperPendingConfigs.some(function(r) { return r.name === SCRIPT_NAME; })) {
+            window.__keyMapperPendingConfigs.push(CFG_PAYLOAD);
         }
+        if (!window.__multReady) {
+            window.__multReady = function() {
+                commitRegister();
+                applyDefaultsOnce();
+                if (window.__keyMapperPendingConfigs) {
+                    window.__keyMapperPendingConfigs = window.__keyMapperPendingConfigs.filter(function(r) { return r.name !== SCRIPT_NAME; });
+                }
+                window.removeEventListener('keymapper:ready', window.__multReady);
+                delete window.__multReady;
+            };
+            window.addEventListener('keymapper:ready', window.__multReady);
+        }
+    } else {
+        console.log('[收益倍率] 已注册并启用默认配置');
     }
 
     // ========== 补丁 1：金币倍率 ==========
@@ -103,7 +111,6 @@
     };
 
     // ========== 补丁 2：经验倍率 ==========
-    var _origGainExp = Game_Actor.prototype.gainExp;
     Game_Actor.prototype.gainExp = function(exp) {
         var mult = isEnabled('exp_rate') ? getVal('exp_rate', 10) : 1;
         var newExp = this.currentExp() + Math.round(exp * this.finalExpRate() * mult);
@@ -128,7 +135,6 @@
             finalAmount = amount * getVal('item_rate', 7);
         }
         _origGainItem.call(this, item, finalAmount, includeEquip);
-        // 兜底：确保非负
         var container = this.itemContainer(item);
         if (container && container[item.id]) {
             container[item.id] = Math.max(container[item.id], 0);
@@ -144,17 +150,13 @@
         var items = [];
         this.enemy().dropItems.forEach(function(drop) {
             if (drop.kind === 1) {
-                if (drop.dataId > 0) {
-                    items.push(this.itemObject(drop.kind, drop.dataId));
-                }
+                if (drop.dataId > 0) items.push(this.itemObject(drop.kind, drop.dataId));
             } else if (drop.kind > 0) {
-                if (Math.random() < drop.probability) {
-                    items.push(this.itemObject(drop.kind, drop.dataId));
-                }
+                if (Math.random() < drop.probability) items.push(this.itemObject(drop.kind, drop.dataId));
             }
         }, this);
         return items;
     };
 
-    console.log('✅ 收益倍率与掉落增强 已加载（默认全部不启用，按 F7 进入"自定义配置"开启）');
+    console.log('✅ 收益倍率与掉落增强 已加载（默认全部启用，可在 F7 → 自定义配置 关闭）');
 })();

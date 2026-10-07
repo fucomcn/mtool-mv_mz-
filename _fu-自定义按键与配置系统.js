@@ -405,6 +405,22 @@
         rebuildSidebar();
         refreshMainArea();
 
+        // ★ 滚轮支持：手动处理，避免被游戏层的 wheel 拦截
+        function bindWheelScroll(el) {
+            if (!el) return;
+            el.addEventListener('wheel', function(e) {
+                e.stopPropagation();
+                // 兼容不同设备的 deltaMode（0=像素 1=行 2=页）
+                var delta = e.deltaY;
+                if (e.deltaMode === 1) delta *= 20;
+                else if (e.deltaMode === 2) delta *= 100;
+                el.scrollTop += delta;
+                e.preventDefault();
+            }, { passive: false });
+        }
+        bindWheelScroll(_listEl);
+        bindWheelScroll(_sidebarEl);
+
         _modal.addEventListener('click', closeManager);
         blockGameInput();
     }
